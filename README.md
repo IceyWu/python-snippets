@@ -1,6 +1,6 @@
 # python-snippets
 
-Collection of useful pythond code snippets🙌
+Collection of useful python code snippets🙌
 
 ---
 
