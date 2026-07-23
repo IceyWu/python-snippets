@@ -86,7 +86,7 @@ def fmt_time(sec: float) -> str:
 
 # ── GUI 主体 ──────────────────────────────────────────────
 
-SEGMENT_COLORS = ["#e94560", "#4fc3f7", "#ffb74d", "#81c784", "#ba68c8", "#4dd0e1"]
+SEGMENT_COLORS = ["#c084fc", "#4fc3f7", "#ffb74d", "#81c784", "#f472b6", "#4dd0e1"]
 HANDLE_SIZE = 10  # 切割手柄三角形大小
 RULER_H = 24      # 时间标尺高度
 BOTTOM_PAD = 28   # 底部留白给段标签
@@ -111,7 +111,8 @@ class AudioCutterApp:
         self.current_time: float = 0
         self.play_timer_id = None
         self.drag_idx: int = -1
-        self.hover_time: float = -1  # 鼠标悬停对应的时间
+        self.dragging_playhead: bool = False
+        self.hover_time: float = -1
 
         # ── 顶部栏 ──
         top = ctk.CTkFrame(self.win, fg_color="#1e1e2e", corner_radius=0, height=48)
@@ -129,8 +130,12 @@ class AudioCutterApp:
                        fg_color="#2b2b3d", hover_color="#3d3d55",
                        command=self.open_file).pack(side="right", padx=(0, 8), pady=9)
 
-        ctk.CTkButton(top, text="🗑 清除切割点", width=100, height=30,
+        ctk.CTkButton(top, text="↩ 撤销上一个", width=100, height=30,
                        fg_color="#3d2020", hover_color="#552828",
+                       command=self.undo_last_point).pack(side="right", padx=(0, 4), pady=9)
+
+        ctk.CTkButton(top, text="🗑 全部清除", width=90, height=30,
+                       fg_color="#2b2b3d", hover_color="#3d3d55",
                        command=self.clear_points).pack(side="right", padx=(0, 4), pady=9)
 
         # ── 波形区域 ──
@@ -143,6 +148,7 @@ class AudioCutterApp:
         self.canvas.bind("<Button-3>", self.on_right_click)
         self.canvas.bind("<Motion>", self.on_hover)
         self.canvas.bind("<Configure>", self.redraw)
+        self.win.bind("<Control-z>", lambda e: self.undo_last_point())
 
         # ── 底部控制栏 ──
         bottom = ctk.CTkFrame(self.win, fg_color="#1e1e2e", corner_radius=0, height=56)
@@ -152,7 +158,17 @@ class AudioCutterApp:
         self.btn_play = ctk.CTkButton(bottom, text="▶ 播放", width=80, height=32,
                                        fg_color="#2b2b3d", hover_color="#3d3d55",
                                        command=self.toggle_play)
-        self.btn_play.pack(side="left", padx=(16, 8), pady=12)
+        self.btn_play.pack(side="left", padx=(16, 4), pady=12)
+
+        # 快退快进
+        ctk.CTkButton(bottom, text="⏪ -5s", width=50, height=28,
+                       fg_color="#2b2b3d", hover_color="#3d3d55",
+                       command=lambda: self.seek_to(max(0, self.current_time - 5))
+                       ).pack(side="left", padx=2, pady=12)
+        ctk.CTkButton(bottom, text="⏩ +5s", width=50, height=28,
+                       fg_color="#2b2b3d", hover_color="#3d3d55",
+                       command=lambda: self.seek_to(min(self.duration, self.current_time + 5))
+                       ).pack(side="left", padx=(2, 8), pady=12)
 
         self.time_label = ctk.CTkLabel(bottom, text="0:00 / 0:00",
                                         font=ctk.CTkFont(size=14), text_color="#aaa")
@@ -213,7 +229,7 @@ class AudioCutterApp:
         self.duration = get_duration(path)
         name = os.path.basename(path)
         self.file_label.configure(text=name[:50] + ("..." if len(name) > 50 else ""))
-        self.info_label.configure(text=f"总时长 {fmt_time(self.duration)}  ·  点击波形添加切割点")
+        self.info_label.configure(text=f"总时长 {fmt_time(self.duration)}  ·  点击标尺跳转  ·  点击波形添加切割点")
         self.btn_cut.configure(state="normal")
         self.progress_bar.set(0)
         self.time_label.configure(text=f"0:00 / {fmt_time(self.duration)}")
@@ -225,7 +241,7 @@ class AudioCutterApp:
         self.waveform = get_waveform_data(self.audio_path)
         self.win.after(0, self.redraw)
         self.win.after(0, lambda: self.info_label.configure(
-            text=f"总时长 {fmt_time(self.duration)}  ·  点击波形添加切割点"))
+            text=f"总时长 {fmt_time(self.duration)}  ·  点击标尺跳转  ·  点击波形添加切割点"))
 
     # ── 绘制 ──
 
@@ -293,14 +309,14 @@ class AudioCutterApp:
             color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
             # 虚线
             self.canvas.create_line(px, RULER_H, px, h, fill=color, width=1.5, dash=(4, 4))
-            # 顶部三角手柄
+            # ▲ 三角手柄（从标尺向下突出）
             self.canvas.create_polygon(
                 px - HANDLE_SIZE, RULER_H + 2,
                 px + HANDLE_SIZE, RULER_H + 2,
-                px, RULER_H + HANDLE_SIZE + 4,
+                px, RULER_H + HANDLE_SIZE + 5,
                 fill=color, outline="#fff", width=1
             )
-            # 时间标签（在手柄上方标尺中）
+            # 时间标签
             self.canvas.create_text(px, RULER_H - 13, text=fmt_time(pt),
                                      fill=color, font=("", 8, "bold"), anchor="s")
 
@@ -320,14 +336,22 @@ class AudioCutterApp:
                                          text=f"第{i + 1}段 · {fmt_time(seg_dur)}",
                                          fill=color, font=("", 8, "bold"))
 
-        # ── 播放头（红色三角 + 竖线） ──
-        if self.current_time > 0:
-            px = int(self.current_time / dur * w)
-            self.canvas.create_line(px, RULER_H, px, h, fill="#e94560", width=2)
-            self.canvas.create_polygon(
-                px - 6, RULER_H, px + 6, RULER_H, px, RULER_H + 8,
-                fill="#e94560", outline="#fff", width=1
-            )
+        # ── 播放头（始终可见，红色粗线 + ▼ 倒三角） ──
+        px = int(self.current_time / dur * w)
+        # 粗实线贯穿整个波形
+        self.canvas.create_line(px, RULER_H, px, h, fill="#e94560", width=3)
+        # ▼ 顶部倒三角手柄（可拖拽）
+        self.canvas.create_polygon(
+            px - 7, 2, px + 7, 2, px, RULER_H - 1,
+            fill="#e94560", outline=""
+        )
+        # 时间标签
+        self.canvas.create_text(px, RULER_H - 14, text=fmt_time(self.current_time),
+                                 fill="#e94560", font=("", 8, "bold"), anchor="s")
+        # 底部圆形手柄
+        r = 5
+        self.canvas.create_oval(px - r, h - BOTTOM_PAD + 10, px + r, h - BOTTOM_PAD + 20,
+                                 fill="#e94560", outline="#fff", width=1)
 
         # ── 悬停指示 ──
         if self.hover_time >= 0 and self.audio_path:
@@ -361,6 +385,20 @@ class AudioCutterApp:
         if not self.audio_path or self.duration <= 0:
             return
         w = self.canvas.winfo_width()
+
+        # 点击标尺区域 → 跳转播放位置
+        if event.y < RULER_H:
+            t = max(0, min(self.duration, event.x / w * self.duration))
+            self.seek_to(t)
+            return
+
+        # 拖动播放头
+        px = self.current_time / self.duration * w
+        if abs(event.x - px) < 10:
+            self.dragging_playhead = True
+            self.canvas.config(cursor="sb_h_double_arrow")
+            return
+
         t = event.x / w * self.duration
 
         # 检查是否点击手柄
@@ -380,9 +418,22 @@ class AudioCutterApp:
         self.redraw()
 
     def on_drag(self, event):
-        if self.drag_idx < 0 or not self.audio_path or self.duration <= 0:
+        if not self.audio_path or self.duration <= 0:
             return
         w = self.canvas.winfo_width()
+
+        # 拖动播放头
+        if self.dragging_playhead:
+            t = max(0, min(self.duration, event.x / w * self.duration))
+            self.current_time = t
+            self.time_label.configure(text=f"{fmt_time(t)} / {fmt_time(self.duration)}")
+            self.progress_bar.set(t / self.duration)
+            self.redraw()
+            return
+
+        # 拖动切割点
+        if self.drag_idx < 0:
+            return
         t = max(0.3, min(self.duration - 0.3, event.x / w * self.duration))
         self.split_points[self.drag_idx] = t
         self.split_points.sort()
@@ -390,6 +441,10 @@ class AudioCutterApp:
         self.redraw()
 
     def on_release(self, event):
+        # 释放播放头：跳转到新位置
+        if self.dragging_playhead:
+            self.dragging_playhead = False
+            self.seek_to(self.current_time)
         self.drag_idx = -1
         self.canvas.config(cursor="")
         self.redraw()
@@ -412,21 +467,51 @@ class AudioCutterApp:
         w = self.canvas.winfo_width()
         self.hover_time = event.x / w * self.duration
 
-        # 靠近手柄时改变光标
-        near_handle = False
-        for pt in self.split_points:
-            px = pt / self.duration * w
-            if abs(event.x - px) < HANDLE_SIZE + 6:
-                near_handle = True
-                break
-        self.canvas.config(cursor="sb_h_double_arrow" if near_handle else "crosshair")
+        # 标尺区域：指针光标（可跳转）；波形区域：十字/拖拽
+        # 靠近播放头：拖拽光标
+        near_playhead = False
+        px = self.current_time / self.duration * w
+        if abs(event.x - px) < 10:
+            near_playhead = True
+            if abs(event.x - px) < 10:
+                near_playhead = True
+
+        if event.y < RULER_H:
+            self.canvas.config(cursor="hand2")
+        elif near_playhead:
+            self.canvas.config(cursor="sb_h_double_arrow")
+        else:
+            near_handle = False
+            for pt in self.split_points:
+                px = pt / self.duration * w
+                if abs(event.x - px) < HANDLE_SIZE + 6:
+                    near_handle = True
+                    break
+            self.canvas.config(cursor="sb_h_double_arrow" if near_handle else "crosshair")
         self.redraw()
 
     def clear_points(self):
         self.split_points.clear()
         self.redraw()
 
+    def undo_last_point(self):
+        if self.split_points:
+            self.split_points.pop()
+            self.redraw()
+
     # ── 播放 ──
+
+    def seek_to(self, time_sec: float):
+        """跳转到指定时间，播放中则从新位置继续。"""
+        was_playing = self.playing
+        if was_playing:
+            self.stop_playback()
+        self.current_time = time_sec
+        self.time_label.configure(text=f"{fmt_time(self.current_time)} / {fmt_time(self.duration)}")
+        self.progress_bar.set(self.current_time / self.duration if self.duration > 0 else 0)
+        if was_playing:
+            self.start_playback()
+        self.redraw()
 
     def toggle_play(self):
         if self.playing:
