@@ -29,7 +29,8 @@ if sys.platform == "win32":
             env_path = subprocess.run(
                 ["powershell", "-Command",
                  f"[Environment]::GetEnvironmentVariable('Path','{scope}')"],
-                capture_output=True, text=True
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace"
             ).stdout.strip()
             if env_path:
                 for p in env_path.split(";"):
@@ -61,7 +62,8 @@ def extract_audio(video_path: str) -> str:
         "-vn", "-ar", "44100", "-ac", "2", "-ab", "192k", "-f", "mp3",
         "-y", tmp_file
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    subprocess.run(cmd, check=True, capture_output=True,
+                   encoding="utf-8", errors="replace")
     return tmp_file
 
 
@@ -328,7 +330,8 @@ def cli_mode():
         cmd = ["python", "-m", "demucs", "--two-stems", "vocals",
                "-n", args.model, "-o", args.output, "--mp3",
                "--mp3-bitrate", "320", audio_path]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True,
+                       encoding="utf-8", errors="replace")
         if tmp and os.path.exists(tmp):
             os.remove(tmp)
         base = os.path.basename(audio_path).rsplit('.', 1)[0]
